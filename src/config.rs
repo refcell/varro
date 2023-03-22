@@ -21,7 +21,7 @@ use crate::{
     errors::ConfigError,
     extract_env,
     rollup::RollupNode,
-    OutputOracle,
+    OutputOracleContract,
 };
 
 /// A system configuration
@@ -106,13 +106,12 @@ impl Config {
     }
 
     /// Get the output oracle contract
-    pub fn get_output_oracle(&self) -> Result<OutputOracle> {
-        // let l1_client = self.get_l1_client()?;
-        // let output_oracle = OutputOracle::new(
-        //     self.get_output_oracle_address(),
-        //     l1_client,
-        // );
-        let output_oracle = OutputOracle {};
+    pub fn get_output_oracle_contract(&self) -> Result<OutputOracleContract<Provider<Http>>> {
+        let l1_client = self.get_l1_client()?;
+        let output_oracle = OutputOracleContract::new(
+            self.get_output_oracle_address(),
+            l1_client.into(),
+        );
         Ok(output_oracle)
     }
 }

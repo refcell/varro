@@ -12,7 +12,7 @@ use crate::{
     metrics::Metrics,
     rollup::RollupNode,
     L1Client,
-    OutputOracle,
+    OutputOracleContract,
 };
 
 /// VarroBuilder
@@ -25,7 +25,7 @@ pub struct VarroBuilder {
     /// A [RollupNode] client
     pub rollup_node: Option<RollupNode>,
     /// An output oracle contract
-    pub output_oracle: Option<OutputOracle>,
+    pub output_oracle: Option<OutputOracleContract<L1Client>>,
     /// Whether to use non-finalized L1 data to propose L2 blocks.
     pub allow_non_finalized: Option<bool>,
     /// The proposer
@@ -42,10 +42,11 @@ impl TryFrom<Config> for VarroBuilder {
     type Error = eyre::Report;
 
     fn try_from(conf: Config) -> std::result::Result<Self, Self::Error> {
+        let output_oracle_contract = conf.get_output_oracle_contract()?;
         Ok(Self {
             l1_client: Some(conf.get_l1_client()?),
             rollup_node: Some(conf.get_rollup_node_client()?),
-            output_oracle: Some(conf.get_output_oracle()?),
+            output_oracle: Some(output_oracle_contract),
             allow_non_finalized: Some(conf.allow_non_finalized),
             proposer: Some(conf.output_oracle_address),
             output_private_key: Some(conf.get_output_private_key()?),
@@ -80,7 +81,7 @@ impl VarroBuilder {
     }
 
     /// Sets the output oracle for the [Varro] client.
-    pub fn with_output_oracle(&mut self, output_oracle: OutputOracle) -> &mut Self {
+    pub fn with_output_oracle(&mut self, output_oracle: OutputOracleContract<L1Client>) -> &mut Self {
         self.output_oracle = Some(output_oracle);
         self
     }

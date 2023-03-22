@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 
+use ethers_middleware::SignerMiddleware;
+use ethers_signers::LocalWallet;
 use futures::lock::Mutex;
 use std::sync::Arc;
 
@@ -8,13 +10,13 @@ use crate::{
     rollup::OutputResponse,
     L1Client,
     OutputOracle,
+    OutputOracleContract,
 };
-
-use ethers_core::types::{
-    Transaction,
+use ethers_providers::Middleware;
+use ethers_core::{types::{
     TransactionReceipt,
-    H256,
-};
+    H256, Address, U256, transaction::eip2718::TypedTransaction,
+}, k256::ecdsa::SigningKey};
 use eyre::Result;
 use tokio::{
     sync::mpsc::UnboundedReceiver,
@@ -82,29 +84,57 @@ impl TransactionPool {
         Ok(())
     }
 
-    /// Constructs a [Transaction] for a given [OutputResponse] proposal.
+    /// Constructs a [TypedTransaction] for a given [OutputResponse] proposal.
     ///
-    /// Returns an [eyre::Result] containing the constructed [Transaction].
+    /// Returns an [eyre::Result] containing the constructed [TypedTransaction].
     pub async fn construct_proposal_tx(
         proposal: OutputResponse,
         l1_client: Arc<Mutex<L1Client>>,
         private_key: &H256,
-    ) -> Result<Transaction> {
+    ) -> Result<TypedTransaction> {
         tracing::debug!(target: "varro=pool", "Constructing proposal: {:?}", proposal);
-        // TODO:
-        Err(eyre::eyre!("unimplemented"))
+
+        let unwrapped_client = l1_client.lock().await;
+        let signing_key = SigningKey::from_bytes(&private_key.0)?;
+        let wallet = LocalWallet::from(signing_key);
+        let client = SignerMiddleware::new(unwrapped_client.to_owned(), wallet);
+        let client = Arc::new(client);
+
+        // TODO: get the output oracle address from the config (pass it into this function)
+        let output_oracle_address = Address::zero();
+        let output_oracle_contract = OutputOracleContract::new(output_oracle_address, client);
+
+        let tx = output_oracle_contract.propose_l2_output(
+            H256::from_slice(proposal.output_root.as_slice()).into(),
+            U256::from(proposal.block_ref.number),
+            // TODO: `current_l1` should contain the l1 hash and the l1 number
+            // TODO: this should be the current l1 hash
+            // proposal.sync_status.current_l1,
+            H256::zero().into(),
+            U256::from(proposal.sync_status.current_l1),
+        );
+
+        Ok(tx.tx)
     }
 
-    /// Sends a [Transaction] to the L1 network through an [L1Client].
+    /// Sends a [TypedTransaction] to the L1 network through an [L1Client].
     ///
     /// Returns an [eyre::Result] containing the [TransactionReceipt] for the sent transaction.
     pub async fn send_transaction(
         l1_client: Arc<Mutex<L1Client>>,
         private_key: &H256,
-        tx: Transaction,
-    ) -> Result<TransactionReceipt> {
-        tracing::debug!(target: "varro=pool", "Sending transaction: {:?}", tx);
-        // TODO:
-        Err(eyre::eyre!("unimplemented"))
+        tx: TypedTransaction,
+    ) -> Result<Option<TransactionReceipt>> {
+        tracing::debug!(target: "varro=pool", "Sending typed transaction: {:?}", tx);
+
+        let unwrapped_client = l1_client.lock().await;
+        let signing_key = SigningKey::from_bytes(&private_key.0)?;
+        let wallet = LocalWallet::from(signing_key);
+        let client = SignerMiddleware::new(unwrapped_client.to_owned(), wallet);
+        let client = Arc::new(client);
+
+        let receipt = client.send_transaction(tx, None).await?;
+        let receipt = receipt.confirmations(1).await?;
+        Ok(receipt)
     }
 }

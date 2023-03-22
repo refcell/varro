@@ -37,7 +37,7 @@ use crate::{
         SyncStatus,
     },
     L1Client,
-    OutputOracle,
+    OutputOracleContract,
     SupportedOutputVersion,
 };
 
@@ -54,7 +54,7 @@ pub struct Varro {
     /// A [RollupNode] client
     rollup_node: Arc<Mutex<RollupNode>>,
     /// An output oracle contract
-    output_oracle: Arc<Mutex<OutputOracle>>,
+    output_oracle: Arc<Mutex<OutputOracleContract<L1Client>>>,
     /// Whether to use non-finalized L1 data to propose L2 blocks.
     allow_non_finalized: bool,
     /// The proposer
@@ -80,6 +80,8 @@ pub struct Varro {
     tx_pool_task: Option<JoinHandle<Result<()>>>,
     /// A handle for the metrics server
     metrics_handle: Option<JoinHandle<Result<()>>>,
+    /// A list of output roots submitted to the [TransactionPool].
+    roots: Vec<Vec<u8>>,
 }
 
 impl TryFrom<VarroBuilder> for Varro {
@@ -118,11 +120,6 @@ impl TryFrom<VarroBuilder> for Varro {
             }
         };
         let metrics = builder.metrics.take();
-
-        // Create a channel for the proposal receiver and sender
-        // TODO: make this channel bound configurable
-        // let proposal_channel_bound = 100;
-        // tracing::debug!(target: "varro=client", "Creating proposal channel with a bound of {}", proposal_channel_bound);
         let (proposal_sender, proposal_receiver) = unbounded_channel();
         let (tx_pool_sender, tx_pool_receiver) = unbounded_channel();
         Ok(Varro {
@@ -141,6 +138,7 @@ impl TryFrom<VarroBuilder> for Varro {
             transaction_pool: Arc::new(Mutex::new(TransactionPool::new())),
             tx_pool_task: None,
             metrics_handle: None,
+            roots: vec![],
         })
     }
 }
@@ -246,13 +244,26 @@ impl Varro {
     }
 
     /// Submits an [OutputResponse] to the [TransactionPool].
-    pub async fn submit_proposal(&self, proposal: OutputResponse) -> Result<()> {
+    pub async fn submit_proposal(&mut self, proposal: OutputResponse) -> Result<()> {
         tracing::info!(target: "varro=client", "received proposal: {:?}", proposal);
         tracing::info!(target: "varro=client", "submitting to transaction pool...");
 
-        // TODO: This check if the proposal is already being sent
-        // TODO: Should probably backoff and retry on fail - the transaction pool may be full
-        self.tx_pool_sender.send(proposal)?;
+        // Check if the proposal is already being sent
+        if self.roots.contains(&proposal.output_root) {
+            tracing::warn!(target: "varro=client", "proposal already being sent, skipping...");
+            return Ok(());
+        }
+
+        // Track that we already submitted this proposal
+        self.roots.push(proposal.output_root.clone());
+
+        // Send proposal to transaction pool with backoff retries
+        // This is to gracefully handle when the transaction pool is full
+        while self.tx_pool_sender.send(proposal.clone()).is_err() {
+            tracing::warn!(target: "varro=client", "transaction pool is full, retrying...");
+            // TODO: make this backoff time configurable
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
 
         Ok(())
     }
@@ -261,15 +272,16 @@ impl Varro {
     pub fn spawn_proposal_task(
         allow_non_finalized: bool,
         rollup_node: Arc<Mutex<RollupNode>>,
-        output_oracle: Arc<Mutex<OutputOracle>>,
+        output_oracle: Arc<Mutex<OutputOracleContract<L1Client>>>,
         proposal_sender: UnboundedSender<OutputResponse>,
     ) -> JoinHandle<Result<()>> {
         // Spawn a new task to create the next proposal
         tokio::task::spawn(async move {
             // Get the next block number to use from the output oracle contract
             let next_block_number = {
-                let locked_output_oracle = output_oracle.lock().await;
-                locked_output_oracle.get_next_block_number().await?
+                let locked_output_oracle = Arc::clone(&output_oracle).lock().await;
+                let pinned = locked_output_oracle.to_owned().next_block_number();
+                pinned.await?
             };
 
             // Get the rollup node's sync status
@@ -282,7 +294,7 @@ impl Varro {
             let block_number = Varro::get_block_number(allow_non_finalized, sync_status);
 
             // We should not be submitting a block in the future
-            if block_number < next_block_number {
+            if block_number < next_block_number.as_u64() {
                 tracing::info!(target: "varro=client", "proposer submission interval has not elapsed, current block number: {}, next block number: {}", block_number, next_block_number);
                 return Ok(())
             }
@@ -291,7 +303,7 @@ impl Varro {
             let output = {
                 let locked_rollup_node = rollup_node.lock().await;
                 locked_rollup_node
-                    .output_at_block(next_block_number)
+                    .output_at_block(next_block_number.as_u64())
                     .await?
             };
 
@@ -302,7 +314,7 @@ impl Varro {
             }
 
             // Validate that the block number is correct
-            if output.block_ref.number != next_block_number {
+            if output.block_ref.number != next_block_number.as_u64() {
                 tracing::warn!(target: "varro=client", "output block number does not match expected block number, skipping proposal on L2 block {}", output.block_ref.number);
                 return Ok(())
             }

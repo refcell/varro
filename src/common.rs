@@ -1,5 +1,7 @@
+#![allow(missing_docs)]
 //! Common Types and Utilies for Varro
 
+use ethers_contract::abigen;
 use eyre::Result;
 
 pub use ethers_providers::{
@@ -7,6 +9,10 @@ pub use ethers_providers::{
     Middleware,
     Provider,
 };
+
+abigen!(OutputOracleContract, "contracts/L2OutputOracle.json");
+
+pub use OutputOracleContract;
 
 /// An enum of supported output versions for the [crate::rollup::OutputResponse] version.
 #[derive(Debug, Clone)]
