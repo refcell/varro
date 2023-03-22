@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use eyre::Result;
 use ethers_core::types::{Address, H256};
+use tokio::task::JoinHandle;
 
 use crate::{metrics::Metrics, L1Client, rollup::{RollupNode, SyncStatus}};
 
@@ -87,6 +88,12 @@ impl Varro {
         }
 
         Ok(())
+    }
+
+    pub async fn construct_proposal() -> Result<JoinHandle<_>> {
+        tokio::task::spawn(async || {
+            
+        })
     }
 
 }
