@@ -1,10 +1,18 @@
 use std::time::Duration;
 
+use ethers_core::types::{
+    Address,
+    H256,
+};
 use eyre::Result;
-use ethers_core::types::{Address, H256};
 
 use crate::{
-    metrics::Metrics, L1Client, rollup::RollupNode, OutputOracle, client::Varro, config::Config,
+    client::Varro,
+    config::Config,
+    metrics::Metrics,
+    rollup::RollupNode,
+    L1Client,
+    OutputOracle,
 };
 
 /// VarroBuilder

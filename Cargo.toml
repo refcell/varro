@@ -66,6 +66,7 @@ ethers-providers = "1.0.2"
 ethers-middleware = "1.0.2"
 ethers-signers = "1.0.2"
 toml = "0.7.3"
+tokio-stream = "0.1.12"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tracing-test = "0.2.4"

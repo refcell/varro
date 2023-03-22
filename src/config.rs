@@ -3,15 +3,25 @@ use std::{
     time::Duration,
 };
 
+use ethers_core::types::{
+    Address,
+    H256,
+};
+use ethers_providers::{
+    Http,
+    Provider,
+};
 use eyre::Result;
-use serde::{Deserialize, Serialize};
-use ethers_providers::{Http, Provider};
-use ethers_core::types::{Address, H256};
+use serde::{
+    Deserialize,
+    Serialize,
+};
 
 use crate::{
     errors::ConfigError,
+    extract_env,
     rollup::RollupNode,
-    extract_env, OutputOracle,
+    OutputOracle,
 };
 
 /// A system configuration
@@ -54,9 +64,9 @@ impl Default for Config {
         Self {
             l1_client_rpc_url: extract_env!("L1_CLIENT_RPC_URL"),
             rollup_node_rpc_url: extract_env!("ROLLUP_NODE_RPC_URL"),
-            output_oracle_address: Address::from_str(
-                &extract_env!("OUTPUT_ORACLE_ADDRESS"),
-            )
+            output_oracle_address: Address::from_str(&extract_env!(
+                "OUTPUT_ORACLE_ADDRESS"
+            ))
             .expect("invalid output oracle address"),
             polling_interval: Duration::from_secs(5),
             num_confirmation: 1,
@@ -73,7 +83,9 @@ impl Default for Config {
 impl Config {
     /// Parses the output private key string into a 32-byte hash
     pub fn get_output_private_key(&self) -> Result<H256> {
-        Ok(H256::from_str(&self.output_private_key).map_err(|_| ConfigError::InvalidOutputPrivateKey(self.output_private_key.clone()))?)
+        Ok(H256::from_str(&self.output_private_key).map_err(|_| {
+            ConfigError::InvalidOutputPrivateKey(self.output_private_key.clone())
+        })?)
     }
 
     /// Returns the output oracle address
@@ -100,8 +112,7 @@ impl Config {
         //     self.get_output_oracle_address(),
         //     l1_client,
         // );
-        let output_oracle = OutputOracle { };
+        let output_oracle = OutputOracle {};
         Ok(output_oracle)
     }
 }
-

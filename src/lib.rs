@@ -16,6 +16,9 @@ pub mod client;
 /// A Builder for the [Varro] client
 pub mod builder;
 
+/// Pool contains the logic to manage proposal transactions
+pub mod pool;
+
 /// Configuration
 pub mod config;
 
@@ -37,12 +40,12 @@ pub(crate) mod macros;
 /// Re-export Archon Types
 pub mod prelude {
     pub use crate::{
-        client::*,
         builder::*,
+        client::*,
         common::*,
         config::*,
         errors::*,
-        telemetry::*,
         metrics::*,
+        telemetry::*,
     };
 }
