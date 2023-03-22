@@ -7,7 +7,7 @@
 mod common;
 pub use common::*;
 
-mod telemetry;
+pub mod telemetry;
 pub use telemetry::*;
 
 /// The core [Varro] client

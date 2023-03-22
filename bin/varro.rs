@@ -2,9 +2,10 @@ use clap::Parser;
 use eyre::Result;
 
 use varro::{
-    client::Varro,
     cli::Cli,
     telemetry,
+    config::Config,
+    builder::VarroBuilder,
 };
 
 #[tokio::main]
@@ -13,8 +14,10 @@ async fn main() -> Result<()> {
     telemetry::register_shutdown();
 
     let cli = Cli::parse();
-    let config = cli.to_config();
-    match Varro::new(Some(config)).start().await {
+    let config =  Config::try_from(cli)?;
+    let builder = VarroBuilder::try_from(config)?;
+    let varro = builder.build()?;
+    match varro.start().await {
         Ok(_) => Ok(()),
         Err(e) => {
             tracing::error!(target: "varro", "Varro exited with error: {}", e);

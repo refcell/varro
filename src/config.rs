@@ -11,7 +11,7 @@ use ethers_core::types::{Address, H256};
 use crate::{
     errors::ConfigError,
     rollup::RollupNode,
-    extract_env,
+    extract_env, OutputOracle,
 };
 
 /// A system configuration
@@ -91,6 +91,17 @@ impl Config {
     pub fn get_rollup_node_client(&self) -> Result<RollupNode> {
         Ok(RollupNode::try_from(self.rollup_node_rpc_url.clone())
             .map_err(|_| ConfigError::InvalidRollupNodeRpcUrl)?)
+    }
+
+    /// Get the output oracle contract
+    pub fn get_output_oracle(&self) -> Result<OutputOracle> {
+        // let l1_client = self.get_l1_client()?;
+        // let output_oracle = OutputOracle::new(
+        //     self.get_output_oracle_address(),
+        //     l1_client,
+        // );
+        let output_oracle = OutputOracle { };
+        Ok(output_oracle)
     }
 }
 

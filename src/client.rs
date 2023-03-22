@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use eyre::Result;
 use ethers_core::types::{Address, H256};
-use tokio::task::JoinHandle;
+use ethers_providers::Middleware;
+// use tokio::task::JoinHandle;
 
-use crate::{metrics::Metrics, L1Client, rollup::{RollupNode, SyncStatus}};
+use crate::{metrics::Metrics, L1Client, rollup::{RollupNode, SyncStatus}, OutputOracle, builder::VarroBuilder, prelude::VarroBuilderError};
 
 /// Varro
 ///
@@ -12,7 +13,7 @@ use crate::{metrics::Metrics, L1Client, rollup::{RollupNode, SyncStatus}};
 ///
 /// The [Varro] client should be constructed using the [crate::builder::VarroBuilder].
 /// The builder provides an ergonomic way to construct the [Varro] client, with sensible defaults.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Varro {
     /// An L1 [L1Client]
     l1_client: L1Client,
@@ -32,12 +33,38 @@ pub struct Varro {
     metrics: Option<Metrics>,
 }
 
-impl Varro {
-    /// Creates a new [Varro] client instance.
-    pub fn new() -> Self {
-        Self::default()
-    }
+impl TryFrom<VarroBuilder> for Varro {
+    type Error = VarroBuilderError;
 
+    fn try_from(mut builder: VarroBuilder) -> std::result::Result<Self, Self::Error> {
+        let l1_client = builder.l1_client.take().ok_or(VarroBuilderError::MissingL1Client)?;
+        let rollup_node = builder.rollup_node.take().ok_or(VarroBuilderError::MissingRollupNode)?;
+        let output_oracle = builder.output_oracle.take().ok_or(VarroBuilderError::MissingOutputOracle)?;
+        let proposer = builder.proposer.take().ok_or(VarroBuilderError::MissingProposer)?;
+        let output_private_key = builder.output_private_key.take().ok_or(VarroBuilderError::MissingOutputPrivateKey)?;
+        let polling_interval = builder.polling_interval.take().ok_or(VarroBuilderError::MissingPollingInterval)?;
+        let allow_non_finalized = match builder.allow_non_finalized {
+            Some(allow_non_finalized) => allow_non_finalized,
+            None => {
+                tracing::warn!(target: "varro=client", "VarroBuilder was not provided 'allow_non_finalized', defaulting to false");
+                false
+            }
+        };
+        let metrics = builder.metrics.take();
+        Ok(Varro {
+            l1_client,
+            rollup_node,
+            output_oracle,
+            allow_non_finalized,
+            proposer,
+            output_private_key,
+            polling_interval,
+            metrics
+        })
+    }
+}
+
+impl Varro {
     /// Derives the block number from a [RollupNode]'s [SyncStatus].
     pub fn get_block_number(&self, sync_status: SyncStatus) -> u64 {
         // If we're not allowed to use non-finalized data,
@@ -50,7 +77,7 @@ impl Varro {
         sync_status.safe_l2
     }
 
-    // TODO: spawn the "run" loop in a separate task
+    // TODO: spawn the "start" loop in a separate task
     // TODO: each `poll_interval` we should spawn a new task to create the next proposal.
     // TODO: these tasks feed back the proposals to the `Varro` client
     // TODO: then Varro checks to make sure the proposal is valid,
@@ -58,10 +85,10 @@ impl Varro {
     // TODO: and dispatches it to the transaction pool
 
 
-    /// Run the [Varro] client.
-    pub async fn run(&self) -> Result<()> {
+    /// Starts the [Varro] client.
+    pub async fn start(&self) -> Result<()> {
         // Get the L1 Chain ID
-        let l1_chain_id = self.l1_client.get_chain_id().await?;
+        let l1_chain_id = self.l1_client.get_chainid().await?;
 
         // The main driver loop
         loop {
@@ -69,19 +96,19 @@ impl Varro {
             let next_block_number = self.output_oracle.get_next_block_number().await?;
 
             // Get the rollup node's sync status
-            let sync_status = self.rollup_node.get_sync_status().await?;
+            let sync_status = self.rollup_node.sync_status().await?;
 
             // Figure out which block number to use
             let block_number = self.get_block_number(sync_status);
 
             // We should not be submitting a block in the future
             if block_number < next_block_number {
-                tracing::info!(target: "varro=client", "proposer submission interval has not elapsed", current_block_number = block_number, next_block_number = next_block_number);
+                tracing::info!(target: "varro=client", "proposer submission interval has not elapsed, current block number: {}, next block number: {}", block_number, next_block_number);
                 continue;
             }
 
             // Get the rollup node output at the given block number
-            let output = self.rollup_node.get_output(next_block_number).await?;
+            let output = self.rollup_node.output_at_block(next_block_number).await?;
 
             // Validate the output
             // if 
@@ -90,11 +117,11 @@ impl Varro {
         Ok(())
     }
 
-    pub async fn construct_proposal() -> Result<JoinHandle<_>> {
-        tokio::task::spawn(async || {
-            
-        })
-    }
+    // pub async fn construct_proposal() -> Result<JoinHandle<_>> {
+    //     tokio::task::spawn(async || {
+
+    //     })
+    // }
 
 }
 
