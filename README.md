@@ -1,4 +1,4 @@
-<img width="100%" src="logo/background.png">
+<img width="100%" src="logo/varro.png">
 
 [![build](https://github.com/refcell/varro/actions/workflows/test.yml/badge.svg)](https://github.com/refcell/varro/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT) [![varro](https://img.shields.io/crates/v/varro.svg)](https://crates.io/crates/varro)
 
