@@ -13,6 +13,12 @@ pub mod client;
 /// Configuration
 pub mod config;
 
+/// CLI parsing
+pub mod cli;
+
+/// The Rollup Node
+pub mod rollup;
+
 /// Common Errors
 pub mod errors;
 
