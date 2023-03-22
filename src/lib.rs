@@ -4,11 +4,17 @@
 #![forbid(unsafe_code)]
 #![forbid(where_clauses_object_safety)]
 
-/// Telemetry
-pub mod telemetry;
+mod common;
+pub use common::*;
 
-/// The core client
+mod telemetry;
+pub use telemetry::*;
+
+/// The core [Varro] client
 pub mod client;
+
+/// A Builder for the [Varro] client
+pub mod builder;
 
 /// Configuration
 pub mod config;
@@ -31,10 +37,12 @@ pub(crate) mod macros;
 /// Re-export Archon Types
 pub mod prelude {
     pub use crate::{
+        client::*,
+        builder::*,
+        common::*,
         config::*,
         errors::*,
         telemetry::*,
         metrics::*,
-        client::*,
     };
 }

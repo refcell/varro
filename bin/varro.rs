@@ -3,7 +3,7 @@ use eyre::Result;
 
 use varro::{
     client::Varro,
-    config::Cli,
+    cli::Cli,
     telemetry,
 };
 

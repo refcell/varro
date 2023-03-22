@@ -42,3 +42,26 @@ pub enum ConfigError {
     #[error("failed to parse the given output private key as a 32 byte hex string: {0}")]
     InvalidOutputPrivateKey(String),
 }
+
+/// A [crate::client::VarroBuilder] Error
+#[derive(Debug, Error)]
+pub enum VarroBuilderError {
+    /// An [crate::L1Client] is required to build a [Varro] client.
+    #[error("an l1 client is required to build a varro client")]
+    MissingL1Client,
+    /// A [crate::rollup::RollupNode] is required to build a [Varro] client.
+    #[error("an rollup node is required to build a varro client")]
+    MissingRollupNode,
+    /// An [crate::output::OutputOracle] is required to build a [Varro] client.
+    #[error("an output oracle is required to build a varro client")]
+    MissingOutputOracle,
+    /// A [crate::proposer::Proposer] is required to build a [Varro] client.
+    #[error("a proposer is required to build a varro client")]
+    MissingProposer,
+    /// An output private key is required to build a [Varro] client.
+    #[error("an output private key is required to build a varro client")]
+    MissingOutputPrivateKey,
+    /// A polling interval is required to build a [Varro] client.
+    #[error("a polling interval is required to build a varro client")]
+    MissingPollingInterval,
+}
