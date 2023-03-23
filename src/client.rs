@@ -1,24 +1,16 @@
-use futures::lock::Mutex;
 use std::{
     sync::Arc,
     time::Duration,
 };
 
-use tokio::{
-    task::JoinHandle,
-    time,
-};
-use tokio_stream::{
-    wrappers::IntervalStream,
-    StreamExt,
-};
+use eyre::Result;
+use futures::lock::Mutex;
+use tokio::task::JoinHandle;
 
 use ethers_core::types::{
     Address,
     H256,
 };
-use ethers_providers::Middleware;
-use eyre::Result;
 
 use tokio::sync::mpsc::{
     unbounded_channel,
@@ -38,7 +30,7 @@ use crate::{
     },
     L1Client,
     OutputOracleContract,
-    SupportedOutputVersion,
+    proposals::ProposalManager,
 };
 
 /// Varro
@@ -53,8 +45,10 @@ pub struct Varro {
     l1_client: Arc<Mutex<L1Client>>,
     /// A [RollupNode] client
     rollup_node: Arc<Mutex<RollupNode>>,
+    /// The output oracle contract address
+    output_oracle_address: Address,
     /// An output oracle contract
-    output_oracle: Arc<Mutex<OutputOracleContract<L1Client>>>,
+    output_oracle: OutputOracleContract<L1Client>,
     /// Whether to use non-finalized L1 data to propose L2 blocks.
     allow_non_finalized: bool,
     /// The proposer
@@ -80,8 +74,12 @@ pub struct Varro {
     tx_pool_task: Option<JoinHandle<Result<()>>>,
     /// A handle for the metrics server
     metrics_handle: Option<JoinHandle<Result<()>>>,
+    /// A handle for the spawned [ProposalManager] task
+    proposal_manager_handle: Option<JoinHandle<Result<()>>>,
     /// A list of output roots submitted to the [TransactionPool].
     roots: Vec<Vec<u8>>,
+    /// A backoff time for sending transaction to the [TransactionPool]
+    tx_backoff: Duration,
 }
 
 impl TryFrom<VarroBuilder> for Varro {
@@ -119,13 +117,18 @@ impl TryFrom<VarroBuilder> for Varro {
                 false
             }
         };
+        let tx_backoff = builder.tx_backoff.take().ok_or(VarroBuilderError::MissingTxBackoff)?;
+        let output_oracle_address = output_oracle.address();
         let metrics = builder.metrics.take();
+
         let (proposal_sender, proposal_receiver) = unbounded_channel();
         let (tx_pool_sender, tx_pool_receiver) = unbounded_channel();
+
         Ok(Varro {
             l1_client: Arc::new(Mutex::new(l1_client)),
             rollup_node: Arc::new(Mutex::new(rollup_node)),
-            output_oracle: Arc::new(Mutex::new(output_oracle)),
+            output_oracle_address,
+            output_oracle,
             allow_non_finalized,
             proposer,
             output_private_key,
@@ -138,8 +141,31 @@ impl TryFrom<VarroBuilder> for Varro {
             transaction_pool: Arc::new(Mutex::new(TransactionPool::new())),
             tx_pool_task: None,
             metrics_handle: None,
+            proposal_manager_handle: None,
             roots: vec![],
+            tx_backoff
         })
+    }
+}
+
+impl Varro {
+    /// Starts the [Varro] client.
+    pub async fn start(&mut self) {
+        // Get the L1 Chain ID
+        // let l1_chain_id = self.l1_client.lock().await.get_chainid().await?;
+
+        // Start a metrics server
+        self.start_metrics_server().await;
+
+        // Spawn the transaction pool task
+        self.start_transaction_pool().await;
+
+        // Start the proposal manager to listen for new proposals
+        self.start_proposal_manager().await;
+
+        // Listen for new proposals and submit them to the transaction pool
+        // This will block until the proposal receiver channel is closed
+        self.listen_for_proposals().await;
     }
 }
 
@@ -172,8 +198,8 @@ impl Varro {
         self.tx_pool_task = Some(tx_pool_handle);
     }
 
-    /// Shuts down associated tasks
-    pub async fn shutdown(&mut self) -> Result<()> {
+    /// Shuts down associated tasks.
+    pub async fn shutdown(&mut self) {
         // Shutdown the transaction pool
         if let Some(tx_pool_task) = &self.tx_pool_task {
             tx_pool_task.abort()
@@ -183,15 +209,34 @@ impl Varro {
         if let Some(metrics_handle) = self.metrics_handle.take() {
             metrics_handle.abort()
         }
-
-        Ok(())
     }
 
-    /// Starts the [Varro] client.
-    pub async fn start(&mut self) -> Result<()> {
-        // Get the L1 Chain ID
-        let l1_chain_id = self.l1_client.lock().await.get_chainid().await?;
+    /// Starts the [ProposalManager] task
+    async fn start_proposal_manager(&mut self) {
+        let l1_client = Arc::clone(&self.l1_client);
+        let rollup_node = Arc::clone(&self.rollup_node);
+        let output_oracle_address = self.output_oracle_address;
+        let allow_non_finalized = self.allow_non_finalized;
+        let polling_interval = self.polling_interval;
+        let proposal_sender = self.proposal_sender.clone();
+        let proposer = self.proposer.clone();
+        let proposal_manager_handle = tokio::spawn(async move {
+            ProposalManager::start(
+                l1_client,
+                rollup_node,
+                output_oracle_address,
+                allow_non_finalized,
+                polling_interval,
+                proposal_sender,
+                proposer,
+            )
+            .await
+        });
+        self.proposal_manager_handle = Some(proposal_manager_handle);
+    }
 
+    /// Starts the [Metrics] server
+    async fn start_metrics_server(&mut self) {
         // Spawn the metrics server
         if let Some(mut metrics) = self.metrics.take() {
             let metrics_handle = tokio::task::spawn(async move {
@@ -200,58 +245,26 @@ impl Varro {
             });
             self.metrics_handle = Some(metrics_handle);
         }
-
-        // Spawn the transaction pool task
-        self.start_transaction_pool().await;
-
-        // Interval Stream every polling interval
-        let interval = self.polling_interval;
-        let allow_non_finalized = self.allow_non_finalized;
-        let rollup_node = Arc::clone(&self.rollup_node);
-        let output_oracle = Arc::clone(&self.output_oracle);
-        let proposal_sender = self.proposal_sender.clone();
-        let _proposing_spawn_handle: JoinHandle<Result<()>> = tokio::spawn(async move {
-            tracing::info!(target: "varro=client", "starting proposer with polling interval: {:?}", interval);
-            let mut stream = IntervalStream::new(time::interval(interval));
-            while let Some(ts) = stream.next().await {
-                tracing::debug!(target: "varro=client", "polling interval triggered at {:?}", ts);
-                tracing::debug!(target: "varr=client", "spawning proposal task in new thread for chain ID: {}", l1_chain_id.as_u64());
-                let _handle = Varro::spawn_proposal_task(
-                    // l1_chain_id.as_u64(),
-                    allow_non_finalized,
-                    Arc::clone(&rollup_node),
-                    Arc::clone(&output_oracle),
-                    proposal_sender.clone(),
-                );
-            }
-            Ok(())
-        });
-
-        // Listen for new proposals and submit them to the transaction pool
-        // This will block until the proposal receiver channel is closed
-        self.listen_for_proposals().await?;
-        Ok(())
     }
 
     /// Listens for new proposals and submits them to the transaction pool.
-    pub async fn listen_for_proposals(&mut self) -> Result<()> {
+    pub async fn listen_for_proposals(&mut self) {
         while let Some(proposal) = self.proposal_receiver.recv().await {
             tracing::debug!(target: "varro=client", "received proposal: {:?}", proposal);
-            self.submit_proposal(proposal).await?;
+            self.submit_proposal(proposal).await;
         }
         tracing::warn!(target: "varro=client", "proposal receiver channel closed, varro client shutting down...");
-        Ok(())
     }
 
     /// Submits an [OutputResponse] to the [TransactionPool].
-    pub async fn submit_proposal(&mut self, proposal: OutputResponse) -> Result<()> {
+    pub async fn submit_proposal(&mut self, proposal: OutputResponse) {
         tracing::info!(target: "varro=client", "received proposal: {:?}", proposal);
         tracing::info!(target: "varro=client", "submitting to transaction pool...");
 
         // Check if the proposal is already being sent
         if self.roots.contains(&proposal.output_root) {
             tracing::warn!(target: "varro=client", "proposal already being sent, skipping...");
-            return Ok(());
+            return;
         }
 
         // Track that we already submitted this proposal
@@ -261,75 +274,7 @@ impl Varro {
         // This is to gracefully handle when the transaction pool is full
         while self.tx_pool_sender.send(proposal.clone()).is_err() {
             tracing::warn!(target: "varro=client", "transaction pool is full, retrying...");
-            // TODO: make this backoff time configurable
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(self.tx_backoff).await;
         }
-
-        Ok(())
-    }
-
-    /// Spawns a new proposal task
-    pub fn spawn_proposal_task(
-        allow_non_finalized: bool,
-        rollup_node: Arc<Mutex<RollupNode>>,
-        output_oracle: Arc<Mutex<OutputOracleContract<L1Client>>>,
-        proposal_sender: UnboundedSender<OutputResponse>,
-    ) -> JoinHandle<Result<()>> {
-        // Spawn a new task to create the next proposal
-        tokio::task::spawn(async move {
-            // Get the next block number to use from the output oracle contract
-            let next_block_number = {
-                let locked_output_oracle = Arc::clone(&output_oracle).lock().await;
-                let pinned = locked_output_oracle.to_owned().next_block_number();
-                pinned.await?
-            };
-
-            // Get the rollup node's sync status
-            let sync_status = {
-                let locked_rollup_node = rollup_node.lock().await;
-                locked_rollup_node.sync_status().await?
-            };
-
-            // Figure out which block number to use
-            let block_number = Varro::get_block_number(allow_non_finalized, sync_status);
-
-            // We should not be submitting a block in the future
-            if block_number < next_block_number.as_u64() {
-                tracing::info!(target: "varro=client", "proposer submission interval has not elapsed, current block number: {}, next block number: {}", block_number, next_block_number);
-                return Ok(())
-            }
-
-            // Get the rollup node output at the given block number
-            let output = {
-                let locked_rollup_node = rollup_node.lock().await;
-                locked_rollup_node
-                    .output_at_block(next_block_number.as_u64())
-                    .await?
-            };
-
-            // Validate the output version
-            if SupportedOutputVersion::V1.equals(&output.version) {
-                tracing::warn!(target: "varro=client", "output version is not not supported, skipping proposal on L2 block {}", output.block_ref.number);
-                return Ok(())
-            }
-
-            // Validate that the block number is correct
-            if output.block_ref.number != next_block_number.as_u64() {
-                tracing::warn!(target: "varro=client", "output block number does not match expected block number, skipping proposal on L2 block {}", output.block_ref.number);
-                return Ok(())
-            }
-
-            // Only allow proposals for finalized blocks and safe, if allowed
-            let is_finalized = output.block_ref.number <= output.sync_status.finalized_l2;
-            let is_safe_and_accepted = allow_non_finalized
-                && output.block_ref.number <= output.sync_status.safe_l2;
-            if !is_finalized && !is_safe_and_accepted {
-                tracing::warn!(target: "varro=client", "output block is not finalized or safe, skipping proposal on L2 block {}", output.block_ref.number);
-                return Ok(())
-            }
-
-            // Reaching this point means we can bubble up the valid proposal through the channel
-            Ok(proposal_sender.send(output)?)
-        })
     }
 }

@@ -64,4 +64,7 @@ pub enum VarroBuilderError {
     /// A polling interval is required to build a [Varro] client.
     #[error("a polling interval is required to build a varro client")]
     MissingPollingInterval,
+    /// A backoff is required for resubmission of transactions
+    #[error("a backoff is required for resubmission of transactions")]
+    MissingTxBackoff,
 }

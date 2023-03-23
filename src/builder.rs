@@ -36,6 +36,8 @@ pub struct VarroBuilder {
     pub polling_interval: Option<Duration>,
     /// An _optional_ metrics server
     pub metrics: Option<Metrics>,
+    /// The transaction backoff
+    pub tx_backoff: Option<Duration>,
 }
 
 impl TryFrom<Config> for VarroBuilder {
@@ -52,6 +54,7 @@ impl TryFrom<Config> for VarroBuilder {
             output_private_key: Some(conf.get_output_private_key()?),
             polling_interval: Some(conf.polling_interval),
             metrics: None,
+            tx_backoff: Some(conf.resubmission_timeout),
         })
     }
 }
@@ -108,6 +111,12 @@ impl VarroBuilder {
     /// Sets the polling interval for the [Varro] client.
     pub fn with_polling_interval(&mut self, polling_interval: Duration) -> &mut Self {
         self.polling_interval = Some(polling_interval);
+        self
+    }
+
+    /// Sets the transaction backoff for the [Varro] client.
+    pub fn with_tx_backoff(&mut self, tx_backoff: Duration) -> &mut Self {
+        self.tx_backoff = Some(tx_backoff);
         self
     }
 

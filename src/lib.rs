@@ -19,6 +19,10 @@ pub mod builder;
 /// Pool contains the logic to manage proposal transactions
 pub mod pool;
 
+/// Proposals holds the [ProposalManager] which
+/// listens for new [OutputResponse] proposals
+pub mod proposals;
+
 /// Configuration
 pub mod config;
 
